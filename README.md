@@ -13,7 +13,7 @@ A lightweight, modular Python-based Prometheus Exporter specifically designed fo
 
 The solution bridges Firebird 2.5 internal monitoring tables (`MON$*`) with PMM's time-series database and an external Grafana instance.
 
-![Architecture Overview](architecture.jpg)
+![Architecture Overview](architecture.png)
 
 ---
 
