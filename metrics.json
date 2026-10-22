@@ -1,0 +1,20 @@
+{
+  "_comment": "Definition zusätzlicher SQL-Metriken für den Firebird Exporter",
+  "custom_queries": [
+    {
+      "name": "firebird_custom_table_count",
+      "type": "gauge",
+      "help": "Beispiel: Anzahl Zeilen in einer bestimmten Anwendungstabelle",
+      "sql": "SELECT COUNT(*) FROM MY_APPLICATION_TABLE",
+      "mode": "scalar"
+    },
+    {
+      "name": "firebird_business_metric",
+      "type": "gauge",
+      "help": "Beispiel: Dynamische Business-Metriken mit Labels aus einer Tabelle",
+      "sql": "SELECT STATUS_NAME, ITEM_COUNT FROM MY_MONITORING_VIEW",
+      "mode": "labeled_kv"
+    }
+  ]
+}
+

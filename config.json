@@ -1,0 +1,14 @@
+{
+  "_comment": "Konfigurationsdatei für den Firebird Prometheus Exporter",
+  "server": {
+    "port": 9103,
+    "scrape_interval_seconds": 15
+  },
+  "database": {
+    "dsn": "localhost:/pfad/zu/deiner/datenbank.fdb",
+    "user": "SYSDBA",
+    "password": "dein_passwort",
+    "charset": "UTF8"
+  }
+}
+
