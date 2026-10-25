@@ -93,7 +93,20 @@ pmm-admin add external \
   --listen-port=9103 \
   --metrics-path=/metrics
 ```
+## Testen des Exporters
 
+Um die Funktionalität des Exporters und den Abruf der Metriken zu überprüfen, kannst du die bereitgestellte Testroutine (`test_exporter.py`) verwenden.
+
+### 1. Voraussetzungen prüfen
+Stelle sicher, dass der Exporter-Dienst läuft und auf Port `9103` erreichbar ist (entweder lokal oder via Docker).
+
+### 2. Test-Skript ausführen
+Das Testskript prüft, ob der Metrik-Endpunkt (`/metrics`) erreichbar ist und ob die erwarteten Prometheus-Metriken korrekt zurückgegeben werden.
+
+Führe das Skript in deinem Terminal aus:
+```bash
+python3 test_exporter.py
+```
 ---
 
 ## 🇬🇧 English Documentation
