@@ -1,149 +1,206 @@
-import time
+"""Firebird 2.5 Prometheus Exporter.
+
+Alle Metriken werden in metrics.json definiert. Der Code enthaelt nur die
+Exporter-eigenen Metriken (firebird_up, Scrape-Dauer, Plattenplatz).
+
+Unterstuetzte Modi in metrics.json:
+  scalar  - eine Zahl (erste Spalte der ersten Zeile)
+  row     - eine Zeile, jede Spalte wird eine eigene Metrik ("columns")
+  labeled - mehrere Zeilen; die ersten Spalten sind Labels ("labels"),
+            die naechste Spalte ist der Wert
+"""
 import json
 import os
-from prometheus_client import start_http_server, Gauge, Counter
-import fdb
+import shutil
+import threading
+import time
 
-# --- HILFSFUNKTIONEN ---
+import fdb
+from prometheus_client import REGISTRY, start_http_server
+from prometheus_client.core import CounterMetricFamily, GaugeMetricFamily
+
+MODES = ("scalar", "row", "labeled")
+
 
 def load_json_file(filename):
-    """Lädt eine JSON-Datei und fängt Fehler ab, falls sie nicht existiert."""
+    """Laedt eine JSON-Datei und meldet fehlende Dateien klar."""
     if not os.path.exists(filename):
         raise FileNotFoundError(f"Die Datei {filename} wurde nicht gefunden!")
-    with open(filename, 'r', encoding='utf-8') as f:
+    with open(filename, "r", encoding="utf-8") as f:
         return json.load(f)
 
-# --- KONFIGURATION & METRIKEN EINLESEN ---
-# Lädt die Server- und Datenbankeinstellungen aus der config.json
-CONFIG = load_json_file('config.json')
-# Lädt die benutzerdefinierten SQL-Abfragen aus der metrics.json
-METRICS_CONFIG = load_json_file('metrics.json')
 
-DB_CONFIG = CONFIG['database']
-SERVER_CONFIG = CONFIG['server']
+def load_metric_definitions(cfg):
+    """Prueft metrics.json beim Start und ueberspringt deaktivierte Eintraege."""
+    definitions = []
+    for i, m in enumerate(cfg.get("metrics", [])):
+        if m.get("enabled", True) is False:
+            continue
+        mode = m.get("mode", "scalar")
+        if mode not in MODES:
+            raise ValueError(f"metrics[{i}]: unbekannter mode '{mode}'")
+        if "sql" not in m:
+            raise ValueError(f"metrics[{i}]: 'sql' fehlt")
+        if mode in ("scalar", "labeled") and "name" not in m:
+            raise ValueError(f"metrics[{i}]: 'name' fehlt")
+        if mode == "row" and not m.get("columns"):
+            raise ValueError(f"metrics[{i}]: 'columns' fehlt")
+        if mode == "labeled" and not m.get("labels"):
+            raise ValueError(f"metrics[{i}]: 'labels' fehlt")
+        definitions.append(m)
+    return definitions
 
-# --- PROMETHEUS METRIKEN DEFINIEREN (Standard für Firebird 2.5) ---
 
-# Counter für Transaktionen (Prometheus berechnet daraus automatisch die Rate pro Sekunde)
-TX_TOTAL = Counter('firebird_transactions_total', 'Gesamtzahl der bisher erzeugten Transaktionen (Next Transaction ID)')
+def new_family(kind, name, help_text, labels=None):
+    """Counter ohne _created-Metrik, Gauge unveraendert."""
+    labels = labels or []
+    if kind == "counter":
+        base = name[:-6] if name.endswith("_total") else name
+        return CounterMetricFamily(base, help_text, labels=labels)
+    return GaugeMetricFamily(name, help_text, labels=labels)
 
-# Gauges für den Zustand des Transaction Counters und Locks
-TX_OIT = Gauge('firebird_transaction_oit', 'Oldest Interesting Transaction (OIT)')
-TX_OAT = Gauge('firebird_transaction_oat', 'Oldest Active Transaction (OAT)')
-TX_GAP = Gauge('firebird_transaction_gap', 'Abstand zwischen Next Transaction und OIT (Garbage Collection Stau)')
 
-ACTIVE_LOCKS = Gauge('firebird_locks_active_total', 'Anzahl der aktuell gehaltenen Locks')
-WAITING_LOCKS = Gauge('firebird_locks_waiting_total', 'Anzahl der Transaktionen, die auf ein Lock warten')
+def run_metric(cur, m):
+    """Fuehrt eine Metrik-Definition aus und liefert Metric-Families."""
+    cur.execute(m["sql"])
+    mode = m.get("mode", "scalar")
+    help_text = m.get("help", m.get("name", ""))
 
-# Dynamische Metriken aus der metrics.json im Speicher vorbereiten
-DYNAMIC_GAUGES = {}
-for q in METRICS_CONFIG.get('custom_queries', []):
-    metric_name = q['name']
-    help_text = q['help']
-    mode = q.get('mode', 'scalar')
-    
-    if mode == 'labeled_kv':
-        # Erstellt eine Gauge mit dynamischem Label 'metric_key'
-        DYNAMIC_GAUGES[metric_name] = {
-            'gauge': Gauge(metric_name, help_text, ['metric_key']),
-            'mode': 'labeled_kv',
-            'sql': q['sql']
-        }
-    else:
-        # Standard Scalar-Gauge ohne Labels
-        DYNAMIC_GAUGES[metric_name] = {
-            'gauge': Gauge(metric_name, help_text),
-            'mode': 'scalar',
-            'sql': q['sql']
-        }
-
-# --- DATENSAMMEL-FUNKTION ---
-
-def collect_metrics():
-    """Verbindet sich mit Firebird, liest Standard- und Custom-Metriken aus."""
-    con = None
-    try:
-        # Verbindung zur Firebird 2.5 Datenbank herstellen
-        con = fdb.connect(
-            dsn=DB_CONFIG['dsn'],
-            user=DB_CONFIG['user'],
-            password=DB_CONFIG['password'],
-            charset=DB_CONFIG['charset']
-        )
-        cur = con.cursor()
-
-        # 1. Standard-Abfrage: Transaction Counter & OIT/OAT aus MON$DATABASE
-        cur.execute("""
-            SELECT 
-                MON$NEXT_TRANSACTION, 
-                MON$OLDEST_TRANSACTION, 
-                MON$OLDEST_ACTIVE 
-            FROM MON$DATABASE
-        """)
+    if mode == "scalar":
         row = cur.fetchone()
-        if row:
-            next_tx, oit, oat = row[0], row[1], row[2]
-            
-            # Absoluten Zähler für Prometheus übergeben
-            TX_TOTAL._value.set(next_tx)
-            TX_OIT.set(oit)
-            TX_OAT.set(oat)
-            
-            # Wichtiger Abstand zur Überwachung des Garbage-Collection-Staus
-            TX_GAP.set(next_tx - oit)
+        if not row or row[0] is None:
+            return []
+        fam = new_family(m.get("type", "gauge"), m["name"], help_text)
+        fam.add_metric([], float(row[0]))
+        return [fam]
 
-        # 2. Standard-Abfrage: Locks überwachen über MON$LOCKS
-        cur.execute("""
-            SELECT 
-                SUM(CASE WHEN MON$LOCK_STATE = 0 THEN 1 ELSE 0 END) AS granted_locks,
-                SUM(CASE WHEN MON$LOCK_STATE = 1 THEN 1 ELSE 0 END) AS waiting_locks
-            FROM MON$LOCKS
-        """)
-        lock_row = cur.fetchone()
-        if lock_row:
-            granted, waiting = lock_row[0] or 0, lock_row[1] or 0
-            ACTIVE_LOCKS.set(granted)
-            WAITING_LOCKS.set(waiting)
+    if mode == "row":
+        row = cur.fetchone()
+        if not row:
+            return []
+        out = []
+        for i, col in enumerate(m["columns"]):
+            if i < len(row) and row[i] is not None:
+                fam = new_family(col.get("type", "gauge"), col["name"],
+                                 col.get("help", col["name"]))
+                fam.add_metric([], float(row[i]))
+                out.append(fam)
+        return out
 
-        # 3. Dynamische Abfragen aus der metrics.json ausführen
-        for key, item in DYNAMIC_GAUGES.items():
-            try:
-                cur.execute(item['sql'])
-                if item['mode'] == 'scalar':
-                    res = cur.fetchone()
-                    if res and res[0] is not None:
-                        item['gauge'].set(res[0])
-                elif item['mode'] == 'labeled_kv':
-                    for sub_row in cur.fetchall():
-                        # Erwartet Spalte 1 als Label-Name und Spalte 2 als numerischen Wert
-                        label_val, metric_val = sub_row[0], sub_row[1]
-                        if metric_val is not None:
-                            item['gauge'].labels(metric_key=str(label_val)).set(metric_val)
-            except Exception as query_err:
-                print(f"Fehler bei Custom Query '{key}': {query_err}")
+    # labeled
+    labels = m["labels"]
+    n = len(labels)
+    fam = new_family(m.get("type", "gauge"), m["name"], help_text, labels)
+    for row in cur.fetchall():
+        if len(row) > n and row[n] is not None:
+            fam.add_metric([str(x).strip() for x in row[:n]], float(row[n]))
+    return [fam]
 
-        cur.close()
-        
-    except Exception as e:
-        print(f"Fehler bei der Datenbankverbindung oder beim Abrufen: {e}")
-    finally:
-        # Verbindung immer sauber schließen, um Leaks zu vermeiden
-        if con:
-            con.close()
 
-# --- HAUPTPROGRAMM ---
+class FirebirdCollector:
+    """Fragt Firebird bei jedem Scrape ab (mit kurzem Cache)."""
 
-if __name__ == '__main__':
-    port = SERVER_CONFIG['port']
-    interval = SERVER_CONFIG['scrape_interval_seconds']
+    def __init__(self, db_config, definitions, disk_path, cache_seconds):
+        self.db = db_config
+        self.definitions = definitions
+        self.disk_path = disk_path
+        self.cache_seconds = cache_seconds
+        self._lock = threading.Lock()
+        self._cache = None
+        self._cache_ts = 0.0
 
-    # Prometheus HTTP-Server starten
+    def describe(self):
+        # Verhindert, dass die Registry beim Registrieren schon scrapt.
+        return []
+
+    def collect(self):
+        with self._lock:
+            now = time.time()
+            if self._cache is None or now - self._cache_ts >= self.cache_seconds:
+                self._cache = self._scrape()
+                self._cache_ts = time.time()
+            families = self._cache
+        for fam in families:
+            yield fam
+
+    def _scrape(self):
+        start = time.time()
+        families = []
+        up = 0
+        failed = 0
+        con = None
+        try:
+            con = fdb.connect(
+                dsn=self.db["dsn"],
+                user=self.db["user"],
+                password=self.db["password"],
+                charset=self.db.get("charset", "UTF8"),
+            )
+            up = 1
+            for m in self.definitions:
+                cur = con.cursor()
+                try:
+                    families.extend(run_metric(cur, m))
+                except Exception as err:  # eine kaputte Query stoppt die anderen nicht
+                    failed += 1
+                    label = m.get("name") or "row-query"
+                    print(f"Fehler bei Metrik '{label}': {err}", flush=True)
+                finally:
+                    cur.close()
+        except Exception as err:
+            print(f"Fehler bei der Datenbankverbindung: {err}", flush=True)
+        finally:
+            if con:
+                try:
+                    con.close()
+                except Exception:
+                    pass
+
+        families.extend(self._disk_families())
+
+        g = GaugeMetricFamily("firebird_up", "1 wenn die Verbindung zu Firebird klappt")
+        g.add_metric([], up)
+        families.append(g)
+        g = GaugeMetricFamily("firebird_scrape_failed_metrics",
+                              "Anzahl fehlgeschlagener Metrik-Queries im letzten Scrape")
+        g.add_metric([], failed)
+        families.append(g)
+        g = GaugeMetricFamily("firebird_scrape_duration_seconds", "Dauer des letzten Scrapes")
+        g.add_metric([], time.time() - start)
+        families.append(g)
+        return families
+
+    def _disk_families(self):
+        if not self.disk_path:
+            return []
+        try:
+            usage = shutil.disk_usage(self.disk_path)
+        except Exception as err:
+            print(f"Plattenplatz nicht lesbar ({self.disk_path}): {err}", flush=True)
+            return []
+        out = []
+        for name, help_text, value in (
+            ("firebird_disk_total_bytes", "Gesamtgroesse des Daten-Volumes", usage.total),
+            ("firebird_disk_free_bytes", "Freier Platz auf dem Daten-Volume", usage.free),
+            ("firebird_disk_used_bytes", "Belegter Platz auf dem Daten-Volume", usage.used),
+        ):
+            g = GaugeMetricFamily(name, help_text)
+            g.add_metric([], value)
+            out.append(g)
+        return out
+
+
+if __name__ == "__main__":
+    CONFIG = load_json_file("config.json")
+    DEFINITIONS = load_metric_definitions(load_json_file("metrics.json"))
+    SERVER = CONFIG["server"]
+    port = SERVER["port"]
+    cache_seconds = SERVER.get("scrape_interval_seconds", 15)
+    disk_path = CONFIG.get("disk", {}).get("path")
+
+    REGISTRY.register(FirebirdCollector(CONFIG["database"], DEFINITIONS, disk_path, cache_seconds))
     start_http_server(port)
-    print(f"Firebird 2.5 Prometheus Exporter gestartet auf Port {port}...")
-    print(f"Lese Intervall: {interval} Sekunden.")
-
-    # Endlosschleife zum zyklischen Abrufen der Metriken
+    print(f"Firebird 2.5 Prometheus Exporter auf Port {port} gestartet.", flush=True)
+    print(f"{len(DEFINITIONS)} Metrik-Definitionen geladen, Cache {cache_seconds}s.", flush=True)
     while True:
-        collect_metrics()
-        time.sleep(interval)
-
+        time.sleep(3600)

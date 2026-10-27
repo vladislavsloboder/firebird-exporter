@@ -1,20 +1,111 @@
 {
-  "_comment": "Definition zusätzlicher SQL-Metriken für den Firebird Exporter",
-  "custom_queries": [
+  "metrics": [
     {
-      "name": "firebird_custom_table_count",
-      "type": "gauge",
-      "help": "Beispiel: Anzahl Zeilen in einer bestimmten Anwendungstabelle",
-      "sql": "SELECT COUNT(*) FROM MY_APPLICATION_TABLE",
-      "mode": "scalar"
+      "name": "firebird_transactions_total",
+      "type": "counter",
+      "help": "Next Transaction ID (steigt mit jeder neuen Transaktion)",
+      "mode": "scalar",
+      "sql": "SELECT MON$NEXT_TRANSACTION FROM MON$DATABASE"
     },
     {
+      "mode": "row",
+      "sql": "SELECT MON$OLDEST_TRANSACTION, MON$OLDEST_ACTIVE, MON$OLDEST_SNAPSHOT, MON$NEXT_TRANSACTION - MON$OLDEST_TRANSACTION, MON$NEXT_TRANSACTION - MON$OLDEST_ACTIVE FROM MON$DATABASE",
+      "columns": [
+        { "name": "firebird_transaction_oit", "help": "Oldest Interesting Transaction (OIT)" },
+        { "name": "firebird_transaction_oat", "help": "Oldest Active Transaction (OAT)" },
+        { "name": "firebird_transaction_ost", "help": "Oldest Snapshot Transaction (OST)" },
+        { "name": "firebird_transaction_gap", "help": "Next minus OIT (Garbage-Collection-Stau)" },
+        { "name": "firebird_transaction_oat_gap", "help": "Next minus OAT (Alter der aeltesten aktiven Transaktion in Transaktionen)" }
+      ]
+    },
+    {
+      "mode": "row",
+      "sql": "SELECT COUNT(*), COALESCE(MAX(DATEDIFF(SECOND, MON$TIMESTAMP, CURRENT_TIMESTAMP)), 0) FROM MON$TRANSACTIONS WHERE MON$STATE = 1 AND MON$TRANSACTION_ID <> CURRENT_TRANSACTION",
+      "columns": [
+        { "name": "firebird_transactions_active", "help": "Anzahl aktiver Transaktionen" },
+        { "name": "firebird_transaction_oldest_active_seconds", "help": "Alter der aeltesten aktiven Transaktion in Sekunden" }
+      ]
+    },
+    {
+      "mode": "row",
+      "sql": "SELECT COUNT(*), COALESCE(SUM(CASE WHEN MON$STATE = 1 THEN 1 ELSE 0 END), 0) FROM MON$ATTACHMENTS WHERE MON$ATTACHMENT_ID <> CURRENT_CONNECTION",
+      "columns": [
+        { "name": "firebird_attachments_total", "help": "Anzahl Client-Verbindungen" },
+        { "name": "firebird_attachments_active", "help": "Verbindungen mit laufendem Statement" }
+      ]
+    },
+    {
+      "name": "firebird_attachments_by_user",
+      "mode": "labeled",
+      "labels": ["user"],
+      "help": "Client-Verbindungen pro Benutzer",
+      "sql": "SELECT MON$USER, COUNT(*) FROM MON$ATTACHMENTS WHERE MON$ATTACHMENT_ID <> CURRENT_CONNECTION GROUP BY MON$USER"
+    },
+    {
+      "mode": "row",
+      "sql": "SELECT COUNT(*), COALESCE(MAX(DATEDIFF(SECOND, MON$TIMESTAMP, CURRENT_TIMESTAMP)), 0) FROM MON$STATEMENTS WHERE MON$STATE = 1 AND MON$ATTACHMENT_ID <> CURRENT_CONNECTION",
+      "columns": [
+        { "name": "firebird_statements_active", "help": "Anzahl laufender Statements" },
+        { "name": "firebird_statement_longest_seconds", "help": "Laufzeit des laengsten laufenden Statements in Sekunden" }
+      ]
+    },
+    {
+      "mode": "row",
+      "sql": "SELECT MON$PAGES * MON$PAGE_SIZE, MON$PAGE_BUFFERS, MON$SWEEP_INTERVAL FROM MON$DATABASE",
+      "columns": [
+        { "name": "firebird_database_size_bytes", "help": "Groesse der Datenbankdatei in Bytes" },
+        { "name": "firebird_page_buffers", "help": "Konfigurierte Page Buffers (0 = Standard)" },
+        { "name": "firebird_sweep_interval", "help": "Konfiguriertes Sweep-Intervall" }
+      ]
+    },
+    {
+      "mode": "row",
+      "sql": "SELECT io.MON$PAGE_READS, io.MON$PAGE_WRITES, io.MON$PAGE_FETCHES, io.MON$PAGE_MARKS FROM MON$IO_STATS io JOIN MON$DATABASE d ON d.MON$STAT_ID = io.MON$STAT_ID",
+      "columns": [
+        { "name": "firebird_page_reads_total", "type": "counter", "help": "Seiten von der Platte gelesen" },
+        { "name": "firebird_page_writes_total", "type": "counter", "help": "Seiten auf die Platte geschrieben" },
+        { "name": "firebird_page_fetches_total", "type": "counter", "help": "Seitenzugriffe im Cache" },
+        { "name": "firebird_page_marks_total", "type": "counter", "help": "Als geaendert markierte Seiten" }
+      ]
+    },
+    {
+      "mode": "row",
+      "sql": "SELECT r.MON$RECORD_SEQ_READS, r.MON$RECORD_IDX_READS, r.MON$RECORD_INSERTS, r.MON$RECORD_UPDATES, r.MON$RECORD_DELETES, r.MON$RECORD_BACKOUTS, r.MON$RECORD_PURGES, r.MON$RECORD_EXPUNGES FROM MON$RECORD_STATS r JOIN MON$DATABASE d ON d.MON$STAT_ID = r.MON$STAT_ID",
+      "columns": [
+        { "name": "firebird_record_seq_reads_total", "type": "counter", "help": "Sequentiell gelesene Datensaetze (ohne Index)" },
+        { "name": "firebird_record_idx_reads_total", "type": "counter", "help": "Per Index gelesene Datensaetze" },
+        { "name": "firebird_record_inserts_total", "type": "counter", "help": "Eingefuegte Datensaetze" },
+        { "name": "firebird_record_updates_total", "type": "counter", "help": "Geaenderte Datensaetze" },
+        { "name": "firebird_record_deletes_total", "type": "counter", "help": "Geloeschte Datensaetze" },
+        { "name": "firebird_record_backouts_total", "type": "counter", "help": "Zurueckgerollte Datensatz-Versionen (Rollbacks)" },
+        { "name": "firebird_record_purges_total", "type": "counter", "help": "Bereinigte alte Datensatz-Versionen (Garbage Collection)" },
+        { "name": "firebird_record_expunges_total", "type": "counter", "help": "Endgueltig entfernte geloeschte Datensaetze" }
+      ]
+    },
+    {
+      "mode": "row",
+      "sql": "SELECT m.MON$MEMORY_USED, m.MON$MEMORY_ALLOCATED FROM MON$MEMORY_USAGE m JOIN MON$DATABASE d ON d.MON$STAT_ID = m.MON$STAT_ID",
+      "columns": [
+        { "name": "firebird_memory_used_bytes", "help": "Von der Datenbank genutzter Speicher" },
+        { "name": "firebird_memory_allocated_bytes", "help": "Von der Datenbank reservierter Speicher" }
+      ]
+    },
+    {
+      "enabled": false,
+      "name": "firebird_custom_table_count",
+      "type": "gauge",
+      "help": "Beispiel: Anzahl Zeilen in einer Anwendungstabelle (Tabellenname anpassen, dann enabled auf true)",
+      "mode": "scalar",
+      "sql": "SELECT COUNT(*) FROM MY_APPLICATION_TABLE"
+    },
+    {
+      "enabled": false,
       "name": "firebird_business_metric",
       "type": "gauge",
-      "help": "Beispiel: Dynamische Business-Metriken mit Labels aus einer Tabelle",
-      "sql": "SELECT STATUS_NAME, ITEM_COUNT FROM MY_MONITORING_VIEW",
-      "mode": "labeled_kv"
+      "help": "Beispiel: Business-Metrik mit Label aus einer Tabelle",
+      "mode": "labeled",
+      "labels": ["status"],
+      "sql": "SELECT STATUS_NAME, ITEM_COUNT FROM MY_MONITORING_VIEW"
     }
   ]
 }
-
