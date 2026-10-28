@@ -1,4 +1,4 @@
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 WORKDIR /app
 
@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # 2. Python-Bibliotheken per pip3 installieren
-RUN pip install --no-cache-dir fdb prometheus_client requests
+RUN pip install --no-cache-dir fdb=2.0.4 prometheus_client requests=0.26.0
 
 # 3. Skripte und Konfigurationen in den Container kopieren
 COPY firebird_exporter.py .
