@@ -8,8 +8,6 @@ services:
     restart: unless-stopped
     ports:
       - "9103:9103"
-    depends_on:
-      - firebird
     volumes:
       - ./config.json:/app/config.json:ro
       - ./metrics.json:/app/metrics.json:ro
