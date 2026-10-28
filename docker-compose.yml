@@ -1,0 +1,15 @@
+services:
+  # Dein Firebird Prometheus Exporter
+  firebird-exporter:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: firebird-prometheus-exporter
+    restart: unless-stopped
+    ports:
+      - "9103:9103"
+    depends_on:
+      - firebird
+    volumes:
+      - ./config.json:/app/config.json:ro
+      - ./metrics.json:/app/metrics.json:ro
