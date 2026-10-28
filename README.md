@@ -123,6 +123,64 @@ python3 test_exporter.py
 3. Run manually to test: `python3 firebird_exporter.py`
 4. Access metrics at: `http://<server-ip>:9103/metrics`
 5. Register with PMM using `pmm-admin` or the PMM Web UI.
+---
+## 🐳 Deployment als Docker-Container
+
+Der Exporter lässt sich als einzelner Container betreiben. Auf dem Server werden weder Python noch `pip` oder die Firebird-Client-Bibliothek installiert, alles steckt im Image (siehe `Dockerfile`). Für ein reproduzierbares Ergebnis sind die Versionen im `Dockerfile` fest eingetragen:
+
+```dockerfile
+FROM python:3.12-slim
+...
+RUN pip install --no-cache-dir fdb==2.0.4 prometheus_client==0.26.0
+```
+
+### 1. Konfiguration
+
+`config.json` neben der `docker-compose.yml` anlegen (Beispiel siehe oben). Innerhalb des Containers zeigt `localhost` auf den Container selbst, im `dsn` also den Hostnamen oder die IP des Firebird-Servers eintragen, z. B. `192.168.1.10:/daten/db.fdb`.
+
+### 2. Starten
+
+```bash
+docker compose up -d --build
+docker logs --tail 20 firebird-prometheus-exporter
+curl -s http://localhost:9103/metrics | grep -E '^firebird_(up|scrape)'
+```
+
+`firebird_up 1.0` bedeutet, dass die Verbindung zur Datenbank funktioniert.
+
+> Läuft Firebird nicht in derselben Compose-Datei, den Eintrag `depends_on: - firebird` entfernen, sonst bricht Compose mit einem Fehler ab.
+
+### 3. PMM-Agent anbinden
+
+Ist auf dem Host ein PMM-Client installiert, registriert er den Exporter-Port einmalig als externen Service. Der Agent liest `localhost:9103`:
+
+```bash
+pmm-admin add external \
+  --service-name=firebird-exporter \
+  --group=firebird \
+  --listen-port=9103 \
+  --metrics-path=/metrics
+```
+
+Läuft der PMM-Client selbst in einem anderen Container oder auf einem anderen Host, nimmst du stattdessen die URL des Exporters:
+
+```bash
+pmm-admin add external-serverless \
+  --external-name=firebird-exporter \
+  --group=firebird \
+  --url=http://<exporter-host>:9103/metrics
+```
+
+Nach ein bis zwei Minuten liefert die Abfrage `firebird_up` in PMM unter *Explore* einen Wert.
+
+### 4. Update
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+Änderungen an `config.json` oder `metrics.json` brauchen nur `docker compose restart firebird-exporter`.
 
 ---
 
