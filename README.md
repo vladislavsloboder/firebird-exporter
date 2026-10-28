@@ -148,8 +148,6 @@ curl -s http://localhost:9103/metrics | grep -E '^firebird_(up|scrape)'
 
 `firebird_up 1.0` bedeutet, dass die Verbindung zur Datenbank funktioniert.
 
-> Läuft Firebird nicht in derselben Compose-Datei, den Eintrag `depends_on: - firebird` entfernen, sonst bricht Compose mit einem Fehler ab.
-
 ### 3. PMM-Agent anbinden
 
 Ist auf dem Host ein PMM-Client installiert, registriert er den Exporter-Port einmalig als externen Service. Der Agent liest `localhost:9103`:
