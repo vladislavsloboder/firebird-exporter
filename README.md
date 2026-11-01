@@ -182,5 +182,21 @@ docker compose up -d --build
 
 ---
 
+## 📊 Dashboard
+
+![Firebird dashboard in PMM](double_firebird_dashboard.png)
+
+Das mitgelieferte Grafana-Dashboard zeigt auf einen Blick, wie es einer Firebird-2.5-Datenbank geht:
+
+- **Status:** Firebird up/down, Verbindungen, älteste aktive Transaktion, Transaction Gap, Cache-Hit-Ratio, freier Plattenplatz
+- **Verbindungen und Transaktionen:** Verläufe für OIT, OAT, OST, Gap, Transaktionen pro Sekunde und Langläufer
+- **Cache und I/O:** Cache-Trefferquote und Seitenzugriffe
+- **Datensätze:** Einfügungen, Änderungen, Löschungen, sequentielle gegen indexierte Lesezugriffe, Garbage Collection
+- **Speicher:** Datenbankgröße, Speicherverbrauch, Plattenplatz
+
+**Einrichten:** In PMM unter *Dashboards → New → Import* die Datei `firebird-dashboard.json` hochladen, die Datenquelle **Metrics** wählen und bestätigen. Mehrere Datenbanken trennst du im Feld **Service (Regex)**, zum Beispiel `firebird01.*`.
+
+🇬🇧 *The bundled Grafana dashboard shows the health of a Firebird 2.5 database at a glance: status tiles, connections and transactions, cache and I/O, record activity and storage. Import `firebird-dashboard.json` via Dashboards → New → Import in PMM, choose the **Metrics** data source, and filter multiple databases with the **Service (Regex)** field.
+
 ## 📄 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
