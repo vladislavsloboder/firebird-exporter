@@ -1,13 +1,65 @@
+# =============================================================================
+#  Project      : Firebird 2.5 Prometheus Exporter & PMM Integration
+#  File         : docker-compose.yml
+#  Description  : Ein Container pro Datenbank. Alles Variable steht in dieser
+#                 Datei, es werden keine config.json und keine .env benoetigt.
+#                 Das Image bleibt fuer alle Datenbanken gleich.
+#  Author       : Vladislav Sloboder
+#  Repository   : https://github.com/vladislavsloboder/firebird-exporter
+#  Created      : 2026-10-27
+#  Last changed : 2026-10-29
+#  License      : MIT (SPDX-License-Identifier: MIT)
+#  Usage        : docker compose up -d --build
+# =============================================================================
+#  Neue Datenbank hinzufuegen: einen Service-Block kopieren und aendern:
+#  Service-/Containername, Host-Port (links in "ports"), FB_DSN, FB_PASSWORD.
+#
+#  Port-Regel: Im Container lauscht das Programm immer auf 9103. Nur der linke
+#  Wert in "ports" (Host-Port) muss pro Datenbank eindeutig sein. Der PMM-Agent
+#  bekommt diesen Host-Port (--listen-port).
+#
+#  Optional pro Service:
+#    volumes:     ["./metrics.json:/app/metrics.json:ro"]   eigene Metriken
+#    networks:    [monitoring-net]                          Firebird im Docker-Netz
+#    extra_hosts: ["host.docker.internal:host-gateway"]     Firebird auf dem Host (Linux)
+#
+#  Hinweis: Passwoerter stehen hier im Klartext. In ein oeffentliches Repository
+#  gehoert nur diese Datei mit Platzhaltern, die echte Datei bleibt auf dem Server.
+# =============================================================================
 services:
-  # Dein Firebird Prometheus Exporter
-  firebird-exporter:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: firebird-prometheus-exporter
+  firebird-exporter01:
+    image: firebird-exporter:2.1.0
+    build: .
+    container_name: firebird-exporter01
     restart: unless-stopped
     ports:
-      - "9103:9103"
-    volumes:
-      - ./config.json:/app/config.json:ro
-      - ./metrics.json:/app/metrics.json:ro
+      - "9103:9103"                      # Host-Port : Container-Port
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      FB_DSN: "host.docker.internal:<Pfad zur Datenbankdatei>"      # Server:Pfad zur Datenbankdatei
+      FB_USER: "SYSDBA"
+      FB_PASSWORD: "masterkey"
+      FB_CHARSET: "UTF8"
+      SCRAPE_CACHE_SECONDS: "15"
+
+  firebird-exporter02:
+    image: firebird-exporter:2.1.0
+    build: .
+    container_name: firebird-exporter02
+    restart: unless-stopped
+    ports:
+      - "9104:9103"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      FB_DSN: "host.docker.internal:<Pfad zur Datenbankdatei>"
+      FB_USER: "SYSDBA"
+      FB_PASSWORD: "masterkey"
+      FB_CHARSET: "UTF8"
+      SCRAPE_CACHE_SECONDS: "15"
+
+ # You can extend the compose file for many more instances.
+ # just copy an instance section and use another port on the left side in the ports section. 
+
+      
